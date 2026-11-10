@@ -9,6 +9,7 @@ on:
 
 jobs:
   build:
+    name: Build V2 APK
     runs-on: ubuntu-22.04
 
     steps:
@@ -32,7 +33,6 @@ jobs:
         run: |
           java -version
           flutter --version
-          flutter doctor -v
 
       - name: Create Flutter project
         run: |
@@ -51,7 +51,7 @@ jobs:
             template/android/app/src/main/AndroidManifest.xml \
             app/android/app/src/main/AndroidManifest.xml
 
-      - name: Configure Android
+      - name: Configure V2 package and app name
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -61,52 +61,69 @@ jobs:
           gradle = android / "build.gradle"
           gradle_kts = android / "build.gradle.kts"
 
+          package_id = "com.jcapps.tqsignal.v2"
+
           if gradle.exists():
-              p = gradle
-              content = p.read_text()
+              content = gradle.read_text()
+
               content = re.sub(
                   r'applicationId\s+"[^"]+"',
-                  'applicationId "com.jcapps.tqsignal"',
+                  f'applicationId "{package_id}"',
                   content
               )
-              content = re.sub(
-                  r'namespace\s+"[^"]+"',
-                  'namespace "com.jcapps.tqsignal"',
-                  content
-              )
-              p.write_text(content)
+
+              gradle.write_text(content)
 
           elif gradle_kts.exists():
-              p = gradle_kts
-              content = p.read_text()
+              content = gradle_kts.read_text()
+
               content = re.sub(
                   r'applicationId\s*=\s*"[^"]+"',
-                  'applicationId = "com.jcapps.tqsignal"',
+                  f'applicationId = "{package_id}"',
                   content
               )
-              content = re.sub(
-                  r'namespace\s*=\s*"[^"]+"',
-                  'namespace = "com.jcapps.tqsignal"',
-                  content
-              )
-              p.write_text(content)
+
+              gradle_kts.write_text(content)
 
           else:
-              raise SystemExit("Android Gradle file not found")
+              raise SystemExit(
+                  "Android Gradle file not found"
+              )
+
+          manifest = (
+              android /
+              "src/main/AndroidManifest.xml"
+          )
+
+          content = manifest.read_text()
+
+          content = re.sub(
+              r'android:label="[^"]*"',
+              'android:label="TQsignal V2"',
+              content
+          )
+
+          manifest.write_text(content)
+
+          print("V2 package:", package_id)
+          print("V2 app name: TQsignal V2")
           PY
 
-      - name: Install dependencies
+      - name: Install Flutter dependencies
         working-directory: app
-        run: flutter pub get
+        run: |
+          flutter pub get
 
       - name: Build release APK
         working-directory: app
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release
 
-      - name: Upload APK
+      - name: Upload V2 APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TQsignal-V2-APK
           path: app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+          retention-days: 30
