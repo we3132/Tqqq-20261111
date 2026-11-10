@@ -1,5 +1,5 @@
 
-name: TQsignal V2 APK Build
+name: TQsignal V2 Separate APK
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    name: Build Separate V2 APK
+    name: Build V2 APK
     runs-on: ubuntu-22.04
 
     steps:
@@ -29,30 +29,33 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Create Flutter project
+      - name: Create fresh Flutter project
         shell: bash
         run: |
           set -euo pipefail
 
-          flutter create \
-            --org com.jcapps \
-            --project-name tqsignal \
-            --platforms android \
-            app
-
           test -f template/lib/main.dart
           test -f template/pubspec.yaml
+
+          rm -rf app
+
+          flutter create \
+            --org com.jcapps.tqsignal \
+            --project-name v2 \
+            --platforms android \
+            app
 
           rm -rf app/lib
           cp -R template/lib app/lib
           cp template/pubspec.yaml app/pubspec.yaml
 
           if [ -f template/android/app/src/main/AndroidManifest.xml ]; then
-            cp template/android/app/src/main/AndroidManifest.xml \
-               app/android/app/src/main/AndroidManifest.xml
+            cp \
+              template/android/app/src/main/AndroidManifest.xml \
+              app/android/app/src/main/AndroidManifest.xml
           fi
 
-      - name: Force V2 application ID
+      - name: Configure separate V2 app
         shell: bash
         run: |
           set -euo pipefail
@@ -62,24 +65,30 @@ jobs:
           import re
 
           root = Path("app/android/app")
+          expected = "com.jcapps.tqsignal.v2"
+
+          kts = root / "build.gradle.kts"
           groovy = root / "build.gradle"
-          kotlin = root / "build.gradle.kts"
 
-          package_id = "com.jcapps.tqsignal.v2"
+          if kts.exists():
+              path = kts
+              content = path.read_text()
 
-          if kotlin.exists():
-              gradle = kotlin
-              content = gradle.read_text()
-
-              pattern = r'applicationId\s*=\s*"[^"]*"'
-              replacement = f'applicationId = "{package_id}"'
+              pattern = r'(?m)^(\s*)applicationId\s*=\s*[^\r\n]+'
+              replacement = (
+                  r'\g<1>applicationId = "'
+                  + expected + '"'
+              )
 
           elif groovy.exists():
-              gradle = groovy
-              content = gradle.read_text()
+              path = groovy
+              content = path.read_text()
 
-              pattern = r'applicationId\s+["\'][^"\']*["\']'
-              replacement = f'applicationId "{package_id}"'
+              pattern = r'(?m)^(\s*)applicationId\s+[^\r\n]+'
+              replacement = (
+                  r'\g<1>applicationId "'
+                  + expected + '"'
+              )
 
           else:
               raise SystemExit(
@@ -89,19 +98,18 @@ jobs:
           content, count = re.subn(
               pattern,
               replacement,
-              content
+              content,
+              count=1
           )
 
           if count != 1:
               raise SystemExit(
-                  f"ERROR: Expected one applicationId, found {count}"
+                  f"ERROR: applicationId replacement count={count}"
               )
 
-          gradle.write_text(content)
+          path.write_text(content)
 
-          manifest = (
-              root / "src/main/AndroidManifest.xml"
-          )
+          manifest = root / "src/main/AndroidManifest.xml"
 
           if not manifest.exists():
               raise SystemExit(
@@ -110,66 +118,74 @@ jobs:
 
           xml = manifest.read_text()
 
-          if re.search(r'android:label="[^"]*"', xml):
-              xml = re.sub(
-                  r'android:label="[^"]*"',
-                  'android:label="TQsignal V2"',
-                  xml,
-                  count=1
-              )
-          else:
+          xml, count = re.subn(
+              r'android:label="[^"]*"',
+              'android:label="TQsignal V2"',
+              xml,
+              count=1
+          )
+
+          if count != 1:
               raise SystemExit(
                   "ERROR: Android app label not found"
               )
 
           manifest.write_text(xml)
 
-          print("Gradle file:", gradle)
-          print("Application ID:", package_id)
-          print("App label: TQsignal V2")
+          print("Gradle file:", path)
+          print("Application ID:", expected)
+          print("App name: TQsignal V2")
           PY
 
       - name: Install dependencies
         working-directory: app
-        run: flutter pub get
+        run: |
+          flutter pub get
 
       - name: Build release APK
         working-directory: app
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release
 
-      - name: Verify actual APK package
+      - name: Verify APK package
         shell: bash
         run: |
           set -euo pipefail
 
           APK="app/build/app/outputs/flutter-apk/app-release.apk"
 
-          test -f "$APK"
+          if [ ! -f "$APK" ]; then
+            echo "::error::APK file not found"
+            exit 1
+          fi
 
           AAPT=$(find "$ANDROID_HOME/build-tools" \
             -type f -name aapt | sort -V | tail -1)
 
           if [ -z "$AAPT" ]; then
-            echo "::error::Android aapt tool not found"
+            echo "::error::Android aapt not found"
             exit 1
           fi
 
-          "$AAPT" dump badging "$APK" | head -1
+          INFO=$("$AAPT" dump badging "$APK")
 
-          ACTUAL=$("$AAPT" dump badging "$APK" \
-            | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          echo "$INFO" | head -1
+
+          ACTUAL=$(echo "$INFO" \
+            | sed -n "s/^package: name='\([^']*\)'.*/\1/p" \
+            | head -1)
 
           EXPECTED="com.jcapps.tqsignal.v2"
 
-          echo "Expected package: $EXPECTED"
-          echo "Actual package:   $ACTUAL"
+          echo "Expected: $EXPECTED"
+          echo "Actual:   $ACTUAL"
 
           if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "::error::APK package ID mismatch"
+            echo "::error::Wrong APK package ID"
             exit 1
           fi
 
-          echo "V2 package verification passed"
+          echo "APK package verification passed"
 
       - name: Rename APK
         shell: bash
@@ -178,7 +194,7 @@ jobs:
             app/build/app/outputs/flutter-apk/app-release.apk \
             TQsignal-V2-separate.apk
 
-      - name: Upload verified APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: TQsignal-V2-Separate-Install
