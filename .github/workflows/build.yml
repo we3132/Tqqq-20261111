@@ -1,74 +1,112 @@
-name: APK 빌드
+
+name: TQsignal V2 APK Build
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Flutter
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          # 핵심: stable을 버전 칸에 넣지 말고, 버전 번호 + channel을 같이 지정
           flutter-version: '3.22.0'
-          channel: 'stable'
+          channel: stable
           cache: true
 
-      - name: Create Flutter app + copy template
+      - name: Check build environment
         run: |
-          flutter create --org com.jcapps --project-name tqsignal app
+          java -version
+          flutter --version
+          flutter doctor -v
+
+      - name: Create Flutter project
+        run: |
+          flutter create \
+            --org com.jcapps \
+            --project-name tqsignal \
+            app
 
           rm -rf app/lib
           cp -R template/lib app/lib
           cp template/pubspec.yaml app/pubspec.yaml
 
           mkdir -p app/android/app/src/main
-          cp template/android/app/src/main/AndroidManifest.xml app/android/app/src/main/AndroidManifest.xml
 
-          # (안전장치) namespace / applicationId를 통일 (Gradle Kotlin/Groovy 둘 다 처리)
-          if [ -f app/android/app/build.gradle.kts ]; then
-            # namespace
-            if grep -q "namespace" app/android/app/build.gradle.kts; then
-              sed -i 's/^ *namespace *= *".*"/    namespace = "com.jcapps.tqsignal"/' app/android/app/build.gradle.kts
-            else
-              # namespace 라인이 없으면 android { 아래에 삽입
-              sed -i '/android\s*{/a\    namespace = "com.jcapps.tqsignal"' app/android/app/build.gradle.kts
-            fi
+          cp \
+            template/android/app/src/main/AndroidManifest.xml \
+            app/android/app/src/main/AndroidManifest.xml
 
-            # applicationId
-            sed -i 's/^ *applicationId *= *".*"/        applicationId = "com.jcapps.tqsignal"/' app/android/app/build.gradle.kts
-          fi
+      - name: Configure Android
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-          if [ -f app/android/app/build.gradle ]; then
-            # applicationId (Groovy)
-            sed -i 's/applicationId ".*"/applicationId "com.jcapps.tqsignal"/' app/android/app/build.gradle
-          fi
+          android = Path("app/android/app")
+          gradle = android / "build.gradle"
+          gradle_kts = android / "build.gradle.kts"
 
-          # Force target/compile SDK 35
-          if [ -f app/android/app/build.gradle.kts ]; then
-            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' app/android/app/build.gradle.kts
-            sed -i 's/targetSdk = flutter.targetSdkVersion/targetSdk = 35/g' app/android/app/build.gradle.kts
-          fi
-          if [ -f app/android/app/build.gradle ]; then
-            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 35/g' app/android/app/build.gradle
-            sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 35/g' app/android/app/build.gradle
-          fi
+          if gradle.exists():
+              p = gradle
+              content = p.read_text()
+              content = re.sub(
+                  r'applicationId\s+"[^"]+"',
+                  'applicationId "com.jcapps.tqsignal"',
+                  content
+              )
+              content = re.sub(
+                  r'namespace\s+"[^"]+"',
+                  'namespace "com.jcapps.tqsignal"',
+                  content
+              )
+              p.write_text(content)
+
+          elif gradle_kts.exists():
+              p = gradle_kts
+              content = p.read_text()
+              content = re.sub(
+                  r'applicationId\s*=\s*"[^"]+"',
+                  'applicationId = "com.jcapps.tqsignal"',
+                  content
+              )
+              content = re.sub(
+                  r'namespace\s*=\s*"[^"]+"',
+                  'namespace = "com.jcapps.tqsignal"',
+                  content
+              )
+              p.write_text(content)
+
+          else:
+              raise SystemExit("Android Gradle file not found")
+          PY
+
+      - name: Install dependencies
+        working-directory: app
+        run: flutter pub get
 
       - name: Build release APK
         working-directory: app
-        run: |
-          flutter pub get
-          flutter build apk --release
+        run: flutter build apk --release
 
-      - name: Upload APK artifact
+      - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: tqsignal-apk
+          name: TQsignal-V2-APK
           path: app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
